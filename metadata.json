@@ -1,0 +1,8 @@
+{
+  "name": "MoneyMate AI",
+  "description": "Ứng dụng quản lý chi tiêu thông minh với trợ lý ảo AI.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

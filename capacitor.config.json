@@ -1,0 +1,15 @@
+{
+  "appId": "io.moneymate.app",
+  "appName": "MoneyMate",
+  "webDir": "dist",
+  "plugins": {
+    "StatusBar": {
+      "overlaysWebView": false,
+      "style": "DARK",
+      "backgroundColor": "#ffffff"
+    }
+  },
+  "android": {
+    "backgroundColor": "#ffffff"
+  }
+}
