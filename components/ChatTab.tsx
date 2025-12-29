@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Mic, Camera, Loader2, Bot } from 'lucide-react';
 import { ChatMessage, AppSettings, Transaction, Account, TransactionType, Category } from '../types';
-import { sendMessageToLlama, parseTransactionFromMessage } from '../services/llamaService';
+import { sendMessageToLlama } from '../services/llamaService';
+import { parseAIResponse, executeAction } from '../services/aiActions';
 
 interface ChatTabProps {
   messages: ChatMessage[];
@@ -31,11 +32,6 @@ const ChatTab: React.FC<ChatTabProps> = ({ messages, setMessages, settings, tran
     if (!inputText.trim()) return;
 
     const text = inputText;
-    const tempUserMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      text: text,
-    };
 
     // 1. Clear input and show loading
     setInputText('');
@@ -46,28 +42,7 @@ const ChatTab: React.FC<ChatTabProps> = ({ messages, setMessages, settings, tran
       await onAddMessage('user', text);
     }
 
-    // 3. Helper vars
-    let transactionAdded = false;
-    let cleanText = '';
-
-    // 4. Try to parse transaction directly from user message
-    const parsedTransaction = parseTransactionFromMessage(text);
-
-    if (parsedTransaction) {
-      const targetAccount = accounts[0];
-      onAddTransaction({
-        amount: parsedTransaction.amount,
-        category: parsedTransaction.category,
-        categoryId: parsedTransaction.category.toLowerCase().replace(/\s/g, '_'),
-        date: new Date().toISOString(),
-        note: parsedTransaction.note,
-        type: parsedTransaction.type === 'INCOME' ? TransactionType.INCOME : TransactionType.EXPENSE,
-        accountId: targetAccount.id
-      });
-      transactionAdded = true;
-    }
-
-    // 5. Call Local LlamaAI
+    // 3. Call Local LlamaAI
     try {
       const responseText = await sendMessageToLlama(
         text,
@@ -80,67 +55,43 @@ const ChatTab: React.FC<ChatTabProps> = ({ messages, setMessages, settings, tran
 
       console.log('[Llama] Raw Response:', responseText);
 
-      // Clean up response
-      cleanText = responseText;
-      cleanText = cleanText.replace(/<\|im_end\|>/g, '')
-        .replace(/<\|im_start\|>/g, '')
-        .replace(/```json[\s\S]*?```/g, '')
-        .replace(/\|\|\|\s*\{[^{}]*\}\s*\|\|\|/g, '');
+      // 4. Parse AI response to get action
+      const action = parseAIResponse(responseText);
+      console.log('[Parse] Action parsed:', action ? JSON.stringify(action) : 'NULL - no valid action found');
 
-      cleanText = cleanText.replace(/\{[^{}]*"action"\s*:\s*"[^"]*"[^{}]*\}/g, '');
-      cleanText = cleanText.trim();
+      let resultMessage = '';
 
-      // Check for hidden JSON response
-      const jsonMatch = responseText.match(/\|\|\|\s*(\{[^{}]*"action"\s*:\s*"add"[^{}]*\})\s*\|\|\|/) ||
-        responseText.match(/(\{[^{}]*"action"\s*:\s*"add"[^{}]*\})/);
+      if (action) {
+        console.log('[Action] Executing:', action.action, 'with params:', JSON.stringify(action.params));
 
-      // Fallback if text is empty
-      if (!cleanText && !transactionAdded) {
-        if (jsonMatch) {
-          cleanText = "Đã xử lý yêu cầu.";
-        } else {
-          cleanText = "Tôi chưa hiểu ý bạn hoặc có lỗi xảy ra.";
-        }
-      }
+        // 5. Execute the action
+        const result = executeAction(
+          action,
+          transactions,
+          accounts,
+          categories,
+          onAddTransaction
+        );
 
-      // Handle JSON action if found and not parsed locally
-      if (jsonMatch && !transactionAdded) {
-        try {
-          const data = JSON.parse(jsonMatch[0]);
-          if (data.action === 'add') {
-            const targetAccount = accounts.find(a => a.id === data.accountId) || accounts[0];
-            onAddTransaction({
-              amount: data.amount,
-              category: data.category || 'Khác',
-              date: data.date || new Date().toISOString(),
-              note: data.note || 'Qua chat AI',
-              type: data.type === 'INCOME' ? TransactionType.INCOME : TransactionType.EXPENSE,
-              accountId: targetAccount.id
-            });
-            transactionAdded = true;
-          }
-        } catch (e) {
-          console.error("Failed to parse AI auto-add", e);
-        }
-      }
+        resultMessage = result.message;
+        console.log('[Action] Result:', result.success ? 'SUCCESS' : 'FAILED', resultMessage);
+      } else {
+        console.log('[Parse] Failed to parse action from response. Treating as plain text.');
+        // No valid action found - treat as plain text
+        resultMessage = responseText
+          .replace(/<\|im_end\|>/g, '')
+          .replace(/<\|im_start\|>/g, '')
+          .replace(/\{[\s\S]*?\}/g, '') // Remove any JSON
+          .trim();
 
-      // Add confirmation text
-      if (transactionAdded) {
-        const amt = parsedTransaction?.amount || 0;
-        const cat = parsedTransaction?.category || 'Giao dịch';
-        const typ = parsedTransaction?.type || 'EXPENSE';
-        // If parsed locally
-        if (parsedTransaction) {
-          cleanText = (cleanText || 'Đã ghi nhận!') + `\n\n✅ Đã ghi nhận: ${typ === 'INCOME' ? '+' : '-'}${amt.toLocaleString()} VNĐ (${cat})`;
-        } else {
-          // If parsed from JSON
-          cleanText = (cleanText || 'Đã ghi nhận!') + `\n\n✅ Đã ghi nhận giao dịch mới.`;
+        if (!resultMessage) {
+          resultMessage = "Tôi chưa hiểu ý bạn. Bạn có thể nói rõ hơn không? 🤔";
         }
       }
 
       // 6. Persist AI message
       if (onAddMessage) {
-        await onAddMessage('model', cleanText);
+        await onAddMessage('model', resultMessage);
       }
 
     } catch (error) {
